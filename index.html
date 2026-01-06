@@ -197,7 +197,7 @@
                 const dx = lm[12].x - lm[0].x;
                 const dy = lm[12].y - lm[0].y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
-                handData.isOpen = dist > 0.35; 
+                handData.isOpen = dist > 0.5; 
 
                 document.getElementById('status-text').innerText = handData.isOpen ? "SYSTEM: ACTIVE_SUN" : "SYSTEM: ECLIPSE_MODE";
             } else {
@@ -257,3 +257,4 @@
     </script>
 </body>
 </html>
+
