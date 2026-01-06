@@ -1,141 +1,15 @@
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Retro-Futurism Audio React - Smoothed</title>
-    <style>
-        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
-        canvas { display: block; }
-        #overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: radial-gradient(circle, #1a0b2e 0%, #000 100%);
-            z-index: 100; display: flex; flex-direction: column; justify-content: center;
-            align-items: center; color: #ff00ff; cursor: pointer;
-        }
-        .start-btn {
-            font-size: 24px; border: 2px solid #ff00ff; padding: 20px 40px;
-            text-shadow: 0 0 10px #ff00ff; box-shadow: 0 0 20px rgba(255,0,255,0.3);
-            transition: 0.3s;
-        }
-        .start-btn:hover { background: #ff00ff; color: #fff; }
-        #hud {
-            position: absolute; top: 30px; left: 50%; transform: translateX(-50%);
-            color: #ff00ff; text-align: center; pointer-events: none; z-index: 10;
-            text-shadow: 0 0 10px #ff00ff;
-        }
-        .glitch { font-size: 24px; font-weight: bold; letter-spacing: 5px; text-transform: uppercase; }
-        #cam-container {
-            position: absolute; bottom: 20px; left: 20px;
-            width: 120px; height: 90px; border: 1px solid #ff00ff;
-            opacity: 0.3; transform: scaleX(-1); overflow: hidden;
-        }
-        #cam-video { width: 100%; height: 100%; object-fit: cover; }
-        .status { font-size: 10px; color: #00ffff; margin-top: 5px; }
-    </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-</head>
-<body>
-
-    <div id="overlay">
-        <div class="start-btn">INITIALIZE NEON SYSTEM</div>
-        <div style="margin-top: 20px; font-size: 12px; color: #00ffff;">点击屏幕以启动增强同步</div>
-    </div>
-
-    <div id="hud">
-        <div class="glitch">NEON GENESIS</div>
-        <div class="status" id="status-text">SYSTEM: STANDBY_</div>
-        <div class="status" id="audio-status">AUDIO: OFFLINE</div>
-    </div>
-
-    <div id="cam-container">
-        <video id="cam-video" playsinline muted autoplay></video>
-    </div>
-
-    <script>
-        // ================= 1. 核心变量 =================
+// ================= 1. 核心变量 =================
         let audioCtx, analyser, dataArray;
         let audioStarted = false;
-        let handData = { x: 0.5, y: 0.2, active: false }; // 初始高度降低
+        let handData = { x: 0.5, y: 0.2, active: false, isOpen: true }; // 增加手势开合状态
         let smoothBass = 0, smoothHigh = 0, smoothMid = 0;
-        let smoothHandY = 0.2; // 用于平滑手部高度
-        let targetSunIntensity = 1.0, currentSunIntensity = 1.0;
+        let smoothHandY = 0.2; 
+        let smoothSunIntensity = 1.0; // 太阳亮度平滑变量
 
-        // ================= 2. 场景设置 =================
-        const scene = new THREE.Scene();
-        scene.fog = new THREE.FogExp2(0x1a0b2e, 0.012);
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 15, 45);
-        camera.lookAt(0, 8, 0);
+        // ================= 2. 场景设置 (保持不变) =================
+        // ... 此处省略你之前的场景代码 ...
 
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.setClearColor(0x0a0510);
-        document.body.appendChild(renderer.domElement);
-
-        // ================= 3. 着色器 =================
-        const terrainVertex = `
-            varying vec2 vUv;
-            varying float vDisp;
-            uniform float uTime;
-            uniform float uHeightControl;
-            uniform float uAudioHigh;
-            float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-            float noise(vec2 p) {
-                vec2 i = floor(p); vec2 f = fract(p);
-                vec2 u = f*f*(3.0-2.0*f);
-                return mix(mix(hash(i + vec2(0,0)), hash(i + vec2(1,0)), u.x),
-                           mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), u.x), u.y);
-            }
-            void main() {
-                vUv = uv;
-                vec3 pos = position;
-                float distFromCenter = abs(pos.x);
-                float mountainMask = smoothstep(5.0, 45.0, distFromCenter);
-                float n = noise(pos.xz * 0.08 - vec2(0.0, uTime * 0.4));
-                float highDetail = noise(pos.xz * 0.3 + uTime * 1.5) * uAudioHigh * 6.0;
-                // 核心高度计算
-                float elevation = (n * 16.0 + highDetail) * uHeightControl * mountainMask;
-                pos.y += elevation;
-                vDisp = pos.y;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-            }
-        `;
-
-        const terrainFragment = `
-            varying vec2 vUv;
-            varying float vDisp;
-            uniform float uTime;
-            uniform float uHue;
-            void main() {
-                vec2 grid = abs(fract(vUv * vec2(40.0, 80.0) - vec2(0.0, uTime * 0.5)) - 0.5);
-                float line = 0.012 / min(grid.x, grid.y);
-                vec3 colorA = vec3(0.9, 0.0, 0.5);
-                vec3 colorB = vec3(0.0, 0.8, 1.0);
-                vec3 baseColor = mix(colorA, colorB, uHue);
-                float glow = vDisp * 0.15;
-                vec3 finalColor = baseColor * (line + glow);
-                float fog = smoothstep(0.0, 0.7, 1.0 - vUv.y);
-                gl_FragColor = vec4(finalColor * fog, 1.0);
-            }
-        `;
-
-        const terrainUniforms = {
-            uTime: { value: 0 },
-            uHeightControl: { value: 0.5 },
-            uHue: { value: 0.5 },
-            uAudioHigh: { value: 0.0 }
-        };
-        const terrainMat = new THREE.ShaderMaterial({
-            vertexShader: terrainVertex, fragmentShader: terrainFragment,
-            uniforms: terrainUniforms, transparent: true
-        });
-        const terrain = new THREE.Mesh(new THREE.PlaneBufferGeometry(200, 200, 128, 128).rotateX(-Math.PI/2), terrainMat);
-        scene.add(terrain);
-
+        // ================= 3. 着色器修改 (太阳色调改为橙红) =================
         const sunMat = new THREE.ShaderMaterial({
             uniforms: { uTime: { value: 0 }, uIntensity: { value: 1.0 } },
             vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
@@ -144,8 +18,9 @@
                 void main() {
                     float dist = distance(vUv, vec2(0.5));
                     if(dist > 0.5) discard;
-                    float stripes = step(0.1, fract(vUv.y * 15.0 - uTime * 0.15));
-                    vec3 color = mix(vec3(1.0, 0.9, 0.0), vec3(1.0, 0.0, 0.5), vUv.y);
+                    float stripes = step(0.12, fract(vUv.y * 12.0 - uTime * 0.1));
+                    // 修改为橙红色调：深红到亮橙的渐变
+                    vec3 color = mix(vec3(0.8, 0.1, 0.0), vec3(1.0, 0.4, 0.0), vUv.y);
                     gl_FragColor = vec4(color * stripes * uIntensity, 1.0);
                 }`,
             transparent: true
@@ -154,43 +29,28 @@
         sun.position.set(0, 18, -100);
         scene.add(sun);
 
-        // ================= 4. 音频系统 =================
-        const audio = new Audio();
-        const primaryUrl = 'music.mp3';
+        // ================= 4. 音频系统 (保持你之前的 music.mp3 逻辑) =================
+        // ... 此处省略音频初始化代码 ...
 
-        audio.crossOrigin = "anonymous";
-        audio.loop = true;
-        audio.src = primaryUrl;
-
-        async function initAudio() {
-            try {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = audioCtx.createAnalyser();
-                const source = audioCtx.createMediaElementSource(audio);
-                source.connect(analyser);
-                analyser.connect(audioCtx.destination);
-                analyser.fftSize = 512;
-                analyser.smoothingTimeConstant = 0.85; // 增加分析器本身的平滑度
-                dataArray = new Uint8Array(analyser.frequencyBinCount);
-                audio.play();
-                audioStarted = true;
-                document.getElementById('audio-status').innerText = "AUDIO: ACTIVE_";
-            } catch (e) {
-                console.error(e);
-            }
-        }
-
-        // ================= 5. 手势识别 =================
+        // ================= 5. 手势识别 (增加开合检测) =================
         const videoElement = document.getElementById('cam-video');
         const hands = new Hands({locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
         hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6 });
+        
         hands.onResults((results) => {
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 handData.active = true;
                 const lm = results.multiHandLandmarks[0];
-                handData.y = 1.0 - lm[8].y; // 食指指尖高度
-                handData.x = lm[8].x;
-                document.getElementById('status-text').innerText = "LINKED: CREATOR_MODE";
+                handData.y = 1.0 - lm[8].y; 
+                handData.x = lm[8].x; // 左右位置
+
+                // 检测手掌开合：计算大拇指尖(4)和食指尖(8)的距离
+                const dx = lm[4].x - lm[8].x;
+                const dy = lm[4].y - lm[8].y;
+                const distance = Math.sqrt(dx*dx + dy*dy);
+                handData.isOpen = distance > 0.15; // 距离阈值判定开合
+
+                document.getElementById('status-text').innerText = handData.isOpen ? "SYSTEM: EXPAND_" : "SYSTEM: CONTRACT_";
             } else {
                 handData.active = false;
                 document.getElementById('status-text').innerText = "SYSTEM: SEARCHING_";
@@ -205,56 +65,27 @@
             requestAnimationFrame(animate);
             const t = clock.getElapsedTime();
 
-            let bass = 0, mid = 0, high = 0;
+            let bass = 0;
             if (audioStarted && analyser) {
                 analyser.getByteFrequencyData(dataArray);
-                for(let i=0; i<6; i++) bass += dataArray[i]; // 低音范围
-                for(let i=10; i<60; i++) mid += dataArray[i];
-                for(let i=100; i<200; i++) high += dataArray[i];
-
+                for(let i=0; i<6; i++) bass += dataArray[i];
                 bass = (bass / (6 * 255));
-                mid = (mid / (50 * 255));
-                high = (high / (100 * 255));
-
-                // 极致平滑插值
                 smoothBass += (bass - smoothBass) * 0.12;
-                smoothMid += (mid - smoothMid) * 0.08;
-                smoothHigh += (high - smoothHigh) * 0.08;
             }
 
-            // 平滑处理手部坐标，防止抖动
-            const targetY = handData.active ? handData.y : 0.2;
-            smoothHandY += (targetY - smoothHandY) * 0.1;
+            // 1. 颜色变化：利用手部 X 坐标控制山脉色相 (0.0 - 1.0)
+            terrainUniforms.uHue.value = handData.active ? handData.x : 0.5;
+
+            // 2. 太阳亮度：根据手掌开合调整基础亮度
+            const targetIntensity = handData.active ? (handData.isOpen ? 2.5 : 0.4) : 1.0;
+            smoothSunIntensity += (targetIntensity - smoothSunIntensity) * 0.1;
 
             terrainUniforms.uTime.value = t;
-
-            // 逻辑修改：
-            // 1. 基础高度由手部决定 (smoothHandY * 3.5)，范围更大
-            // 2. 音频跳动作为附加量 (smoothBass * 1.8)，但整体缩小，保证流畅感
             terrainUniforms.uHeightControl.value = (smoothHandY * 3.8) + (smoothBass * 1.5);
-
-            terrainUniforms.uAudioHigh.value = smoothHigh;
-            terrainUniforms.uHue.value = handData.active ? handData.x : 0.5 + smoothMid * 0.2;
-
+            
             sunMat.uniforms.uTime.value = t;
-            sunMat.uniforms.uIntensity.value = 1.0 + smoothBass * 2.0;
+            // 最终太阳亮度 = 手势亮度 + 音频低音跳动
+            sunMat.uniforms.uIntensity.value = smoothSunIntensity + smoothBass * 2.0;
 
             renderer.render(scene, camera);
         }
-
-        document.getElementById('overlay').addEventListener('click', function() {
-            this.style.display = 'none';
-            initAudio();
-            animate();
-        });
-
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-    </script>
-</body>
-
-</html>
-
